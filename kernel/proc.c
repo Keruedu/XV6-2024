@@ -283,10 +283,14 @@ fork(void)
   struct proc *np;
   struct proc *p = myproc();
 
+
+
   // Allocate process.
   if((np = allocproc()) == 0){
     return -1;
   }
+   // Copy mask
+ np->mask = p->mask;
 
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
@@ -321,7 +325,7 @@ fork(void)
   acquire(&np->lock);
   np->state = RUNNABLE;
   release(&np->lock);
-
+ 
   return pid;
 }
 
@@ -693,3 +697,4 @@ procdump(void)
     printf("\n");
   }
 }
+
