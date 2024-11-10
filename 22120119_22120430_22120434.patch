@@ -1,0 +1,329 @@
+diff --git a/xv6-labs-2024/Makefile b/xv6-labs-2024/Makefile
+index 74e454f..91f76f9 100644
+--- a/xv6-labs-2024/Makefile
++++ b/xv6-labs-2024/Makefile
+@@ -194,6 +194,10 @@ UPROGS=\
+ 	$U/_grind\
+ 	$U/_wc\
+ 	$U/_zombie\
++	$U/_pingpong\
++	$U/_find\
++	$U/_primes\
++	$U/_xargs\
+ 
+ 
+ 
+diff --git a/xv6-labs-2024/user/find.c b/xv6-labs-2024/user/find.c
+new file mode 100644
+index 0000000..8c01f87
+--- /dev/null
++++ b/xv6-labs-2024/user/find.c
+@@ -0,0 +1,105 @@
++#include "kernel/types.h"
++#include "kernel/stat.h"
++#include "user/user.h"
++#include "kernel/fs.h"
++#include "kernel/fcntl.h" 
++                                                                                          // hàm fmt để trả về tên thư mục hoặc tệp từ đường dẫn path
++char *fmtname(char *path)
++{
++  static char buf[DIRSIZ + 1];
++  char *p;
++
++                                                                                              // Tìm kí tự '/' cuối cùng
++  for (p = path + strlen(path); p >= path && *p != '/'; p--)
++    ;
++  p++;
++
++                                                                                       // Trả về tên của  của tệp hoặc thư mục đang đọc
++  if (strlen(p) >= DIRSIZ)                                                              // kiểm tra chiều dài có vượt quá giới hạn không
++    return p;
++  memmove(buf, p, strlen(p));                                                         // copy tên thư mục hoặc tệp đang đọc vào buf
++  buf[strlen(p)] = '\0';                                                              // chuyển kí tự cuối cùng về '\0'
++  return buf;                                                                         // trả về buf
++} 
++                                                                                          // viết hàm find
++void find(char *path, char *findname)
++{
++  char buf[512], *p;                                                              // buf là mảng kí tự dùng để lưu đường dẫn tạm. p là con trỏ trỏ tới phần tử của mảng đó
++  int fd;                                                                             // lưu file descriptor
++  struct dirent de;                                                                  // lưu phần tử đại diện cho 1 entry
++  struct stat st;                                                                    // lưu phần tử chứa thông ti của tệp
++
++  // lấy fd từ đường dẫn và kiểm tra
++  if ((fd = open(path, O_RDONLY)) < 0)
++  {
++    fprintf(2, "ls: cannot open %s\n", path);
++    return;
++  }
++
++                                                                                      // lấy st từ fd và kiểm tra
++  if (fstat(fd, &st) < 0)
++  {
++    fprintf(2, "ls: cannot stat %s\n", path);
++    close(fd);
++    return;
++  }
++                                                                                        // tùy loại tệp mà ta xử lý khác nhau
++  switch (st.type)
++  {
++  case T_DEVICE:
++  case T_FILE:                                                                          // nếu là file thì in ra đường dẫn luôn
++
++    if (strcmp(fmtname(path), findname) == 0)                                           // kiểm tra tên file đang đọc có trùng với tên file đang kiếm không
++      printf("%s\n", path);
++    break;
++
++  case T_DIR:                                                                                 // nếu là thư mục thì ta phải vừa tìm vừa truy xuất vào thư mục con ( dùng đệ quy )
++    if (strlen(path) + 1 + DIRSIZ + 1 > sizeof buf)
++    {                                                                                       // kiểm tra chiều dài
++      printf("ls: path too long\n");
++      break;
++    }
++
++    while (read(fd, &de, sizeof(de)) == sizeof(de))
++    {                                                                                        // đọc các thư mục hoặc tệp ở thư mục hiện tại
++
++      if (strcmp(".", fmtname(de.name)) == 0 || strcmp("..", fmtname(de.name)) == 0)
++      {                                                                                     // bỏ qua thư mục . và  ..
++        continue;
++      }
++
++      if (de.inum == 0)                                                                          // kiểm tra thông tin của entry
++        continue;
++                                                                                                   // tạo đường dẫn đến các thư mục, tệp con
++      strcpy(buf, path);
++      p = buf + strlen(buf);
++      *p++ = '/';
++      memmove(p, de.name, DIRSIZ);
++      p[DIRSIZ] = 0;
++                                                                                                   // Kiểm tra xem có mở được không
++      if (stat(buf, &st) < 0)
++      {
++        printf("ls: cannot stat %s\n", buf);
++        continue;
++      }
++
++                                                                                                      // Đệ quy vào tệp hoặc thư mục, nếu là tệp thì phía trên đã xử lý, nếu là thư mục thì sẽ đệ quy lần nữa
++      find(buf, findname);
++    }
++    break;
++  }
++  close(fd);
++}
++
++int main(int argc, char *argv[])
++{
++  // Kiểm tra số lượng tham số
++  if (argc < 3)
++  {
++    printf("Usage: %s <path> <name_to_find>\n", argv[0]);
++    exit(0);
++  }
++
++  find(argv[1], argv[2]);
++  exit(0);
++}
+\ No newline at end of file
+diff --git a/xv6-labs-2024/user/pingpong.c b/xv6-labs-2024/user/pingpong.c
+new file mode 100644
+index 0000000..2ff6e03
+--- /dev/null
++++ b/xv6-labs-2024/user/pingpong.c
+@@ -0,0 +1,29 @@
++#include "kernel/types.h"  // Khai báo các kiểu dữ liệu cơ bản (int, uint, ...)
++#include "kernel/stat.h"   // Khai báo các hàm liên quan đến file stat
++#include "user/user.h"     // Khai báo các hàm hệ thống như fork, pipe, read, write
++
++int main(int argc, char *argv[])
++{
++    int p[2];  // tạo 2 file descriptor p[0] để, đọc p[1] để ghi
++    char recv_buf[5]; // tạo chuỗi chứa dữ liệu nhận được
++
++    pipe(p); // tạo đường ống giữa 2 tiến trình
++
++    if (fork() == 0) {  // gọi fork() để tạo tiến trình con trong tiến trình cha đang chạy, nó sẽ trả về khác 0 ở tiến trình cha và bằng 0 ở tiến trình con
++        read(p[0], recv_buf, 5);  // đọc dữ liệu từ cha
++        printf("%d: received %s\n", getpid(), recv_buf); // in ra màn hình
++        close(p[0]);  // đóng đầu đọc
++
++        write(p[1], "pong", 5); // ghi dữ liệu vào pipe
++        close(p[1]); // đóng đầu ghi
++
++    } else {  // Tiến trình cha
++        write(p[1], "ping", 5);  // viết vào pipe
++        close(p[1]);    // đóng đầu viết
++             wait(0);  // chờ tiến trình con chạy xong
++        read(p[0], recv_buf, 5);  // đọc dữ liệu từ tiến trình con
++        printf("%d: received %s\n", getpid(), recv_buf); // in ra màn hình
++        close(p[0]); // đóng đầu đọc
++    }
++    exit(0);
++}
+\ No newline at end of file
+diff --git a/xv6-labs-2024/user/primes.c b/xv6-labs-2024/user/primes.c
+new file mode 100644
+index 0000000..2dbec89
+--- /dev/null
++++ b/xv6-labs-2024/user/primes.c
+@@ -0,0 +1,65 @@
++#include "kernel/types.h"
++#include "kernel/stat.h"
++#include "user/user.h"
++
++void primes(int left_pipe[2]) __attribute__((noreturn));
++
++void primes(int left_pipe[2]) {
++    int p, num;
++    int right_pipe[2];
++    close(left_pipe[1]);
++
++    if (read(left_pipe[0], &p, sizeof(p)) == 0) {
++        close(left_pipe[0]);
++        exit(0);
++    }
++    printf("prime %d\n", p);
++
++    if (pipe(right_pipe) < 0) {
++        printf("pipe failed\n");
++        exit(1);
++    }
++
++    if (fork() == 0) {
++        close(left_pipe[0]); 
++        primes(right_pipe);   
++    } else {
++        close(right_pipe[0]); 
++        while (read(left_pipe[0], &num, sizeof(num)) > 0) {
++           
++            if (num % p != 0) {
++                write(right_pipe[1], &num, sizeof(num));
++            }
++        }
++        close(left_pipe[0]);  
++        close(right_pipe[1]);
++        wait(0);              
++        exit(0);
++    }
++}
++
++int main() {
++    int i;
++    int left_pipe[2];
++
++    if (pipe(left_pipe) < 0) {
++        printf("pipe failed\n");
++        exit(1);
++    }
++
++    if (fork() == 0) {
++        primes(left_pipe);
++    } else {
++
++        close(left_pipe[0]);
++        for (i = 2; i <= 280; i++) {
++            if (write(left_pipe[1], &i, sizeof(i)) < 0) {
++                printf("write failed\n");
++                exit(1);
++            }
++        }
++        close(left_pipe[1]); 
++        wait(0);           
++        exit(0);
++    }
++}
+diff --git a/xv6-labs-2024/user/xargs.c b/xv6-labs-2024/user/xargs.c
+new file mode 100644
+index 0000000..233efe6
+--- /dev/null
++++ b/xv6-labs-2024/user/xargs.c
+@@ -0,0 +1,88 @@
++#include "kernel/types.h"
++#include "user/user.h"
++#include "kernel/param.h"
++int main(int argc,char *argv[])
++{
++    int b_argc=1;
++    char * b_argv[MAXARG];
++    int i=0;
++    char buf[512];
++    char *start;
++    char *end;
++    if(strcmp(argv[1],"-n")==0)
++    {
++        i=3;
++    }
++    else{
++        i=1;
++    }
++    b_argv[0]=argv[i];
++    i++;
++    for(;i<argc;i++)
++    {
++        b_argv[b_argc++]=argv[i];
++    }
++    start=end=buf;
++    while(read(0,end,sizeof(char)))
++    {
++        if(*end=='\n')
++        {
++            if(b_argc==MAXARG-1)
++            {
++                fprintf(2,"too many arguments\n");
++            }
++            else{
++                *end='\0';
++                b_argv[b_argc++]=start;
++                if(fork()==0)
++                {
++                    exec(b_argv[0],b_argv);
++                    fprintf(2, "exec failed\n");
++                    exit(1);
++                }
++                else
++                { 
++                    wait(0);
++                }
++            }
++            start=end=buf;
++            b_argc=argc-1;
++        }
++        else if(*end==' ')
++        {
++            if(b_argc==MAXARG-1)
++            {
++                fprintf(2,"too many arguments\n");
++                while(*end!='\n')
++                {
++                    read(0,end,sizeof(char));
++                }
++                end=start=buf;
++                b_argc=argc-1;
++            }
++            else
++            {
++                *end='\0';
++                b_argv[b_argc++]=start;
++                end++;
++                start=end;
++            }
++        }
++        else
++        {
++            end++;
++            if(end>=buf+sizeof(buf))
++            {
++                end--;
++                while(*end!='\n')
++                {
++                    read(0,end,sizeof(char));
++                }
++                fprintf(2,"too many inputs\n");
++                end=start=buf;
++                b_argc=argc-1;
++            }
++        }
++    }
++    exit(0);
++}
+\ No newline at end of file
